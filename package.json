@@ -1,0 +1,13 @@
+{
+  "name": "figma-vue-mcp",
+  "version": "1.0.0",
+  "description": "Custom Figma MCP server for Vue 3 + BuilderX design system",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1"
+  }
+}
