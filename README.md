@@ -1,42 +1,29 @@
 # Figma-Vue MCP Server
 
-Custom MCP (Model Context Protocol) server cho project BuilderX. Kết nối trực tiếp với Figma API và chuyển đổi design sang **Vue 3 code** sử dụng design system components có sẵn trong `@/components/design/`.
+Custom MCP server cho BuilderX — fetch Figma design → output Vue 3 code với `@/components/design/` + `text-design-*` classes + Webcake CDN images.
 
-## Tại sao không dùng Figma MCP mặc định?
-
-Figma MCP chính thức (`mcp.figma.com`) output **React + Tailwind** — không phù hợp với project Vue 3. Server này giải quyết vấn đề đó:
-
-| | Figma MCP (mặc định) | figma-vue (custom) |
-|---|---|---|
-| Output | React JSX | Vue 3 SFC (`<template>` + `<script setup>`) |
-| Components | Generic HTML/React | 62 components từ `@/components/design/` |
-| Props mapping | Không | Auto-detect props, slots, emits |
-| Design tokens | Tailwind generic | Tailwind + project conventions |
-| Layout | Flexbox generic | Tailwind classes từ Figma auto-layout |
-| Typography | Raw CSS | `<Typography variant="h1..footnote-sm">` |
-
-## Cài đặt
-
-### 1. Install dependencies
+## Quick Install
 
 ```bash
-cd mcp/figma-vue
-npm install
+bash mcp/figma-vue/install.sh
 ```
 
-### 2. Tạo Figma Access Token
+Script tự động:
+- Install dependencies
+- Hỏi tokens (Figma + Webcake)
+- Chọn editors để cấu hình: **Claude Code**, **Cursor**, **VS Code**, **Windsurf**, **Antigravity**, **Codex CLI**
+- Tạo config file đúng format cho từng editor
+- Verify server
 
-1. Truy cập https://www.figma.com/developers/api#access-tokens
-2. Click **"Create a new personal access token"**
-3. Đặt tên (vd: `builderx-mcp`) và chọn scope:
-   - `File content` (Read) — bắt buộc
-   - `File metadata` (Read) — bắt buộc
-4. Copy token
+## Manual Install
 
-### 3. Cấu hình token
+```bash
+cd mcp/figma-vue && npm install
+```
 
-Mở `.mcp.json` ở root project, paste token vào:
+Tạo config cho editor (chọn 1):
 
+**Claude Code** — `.mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -45,311 +32,153 @@ Mở `.mcp.json` ở root project, paste token vào:
       "command": "node",
       "args": ["mcp/figma-vue/server.js"],
       "env": {
-        "FIGMA_ACCESS_TOKEN": "figd_PASTE_TOKEN_HERE"
+        "FIGMA_ACCESS_TOKEN": "",
+        "WEBCAKE_JWT": "",
+        "WEBCAKE_SESSION_ID": ""
       }
     }
   }
 }
 ```
 
-> **Lưu ý**: `.mcp.json` đã được gitignore. Token chỉ lưu local, không push lên repo.
+**Cursor** — `.cursor/mcp.json`: format giống trên
 
-### 4. Restart Claude Code
+**VS Code** — `.vscode/mcp.json`: dùng key `"servers"` thay `"mcpServers"`
 
-```bash
-# Kiểm tra server đã kết nối
-claude mcp list
-# Expected: figma-vue: ... - ✓ Connected
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json`: format giống Claude Code
+
+**Antigravity** — `~/.gemini/antigravity/mcp_config.json`: format giống Claude Code
+
+### Tokens
+
+| Env | Lấy từ | Bắt buộc |
+|---|---|---|
+| `FIGMA_ACCESS_TOKEN` | https://figma.com/developers/api#access-tokens | Yes |
+| `WEBCAKE_JWT` | DevTools → Cookies → `jwt` | Cho image upload |
+| `WEBCAKE_SESSION_ID` | DevTools → Cookies → `wsid` | Cho image upload |
+
+## Tools (10)
+
+### `get_design_context` — Tool chính
+
+Fetch ALL-IN-ONE: screenshot + element tree + component mapping + text + images + implementation prompt.
+
+```
+Implement design: https://www.figma.com/design/ABC/File?node-id=1-2
 ```
 
-## Tools
+Output gồm:
+- **Screenshot** download local → Claude xem bằng Read tool
+- **Element tree** dev-mode style: position, size, gradient CSS, shadow CSS, text-design class, line-height, letter-spacing
+- **Component mapping** → `@/components/design/`
+- **Images** auto-upload Webcake CDN URLs
+- **Implementation prompt** hướng dẫn Claude implement
 
 ### `get_figma_node`
-
-Fetch node tree từ Figma với đầy đủ thông tin layout, fills, strokes, text, effects.
-
-```
-Dùng: get_figma_node với figma_url
-Input: Figma URL hoặc file key + node_id
-Output: JSON node tree đã simplify
-```
-
-**Ví dụ prompt:**
-```
-Lấy thông tin node này: https://www.figma.com/design/ABC123/MyFile?node-id=1-2
-```
-
----
+Raw JSON node tree.
 
 ### `get_figma_screenshot`
-
-Lấy ảnh render (PNG/SVG/JPG) của một node. Dùng để xem visual reference trước khi code.
-
-```
-Input: figma_url, node_id (optional nếu có trong URL), scale (1-4), format
-Output: URL ảnh (có thời hạn)
-```
-
-**Ví dụ prompt:**
-```
-Screenshot node 1-2 trong file https://www.figma.com/design/ABC123/MyFile
-```
-
----
+Rendered image URL. Auto-retry giảm scale khi timeout.
 
 ### `get_figma_styles`
-
-Lấy tất cả styles (colors, text styles, effects, grids) định nghĩa trong file Figma.
-
-```
-Input: figma_url
-Output: Danh sách styles với name, type (FILL/TEXT/EFFECT/GRID)
-```
-
-**Ví dụ prompt:**
-```
-Lấy design tokens từ file Figma này: https://www.figma.com/design/ABC123/MyFile
-```
-
----
+Design tokens (colors, text, effects).
 
 ### `get_figma_components`
-
-Liệt kê tất cả components trong file Figma kèm ID, tên, mô tả.
-
-```
-Input: figma_url
-Output: Danh sách components
-```
-
-**Ví dụ prompt:**
-```
-Liệt kê components trong file Figma: https://www.figma.com/design/ABC123/MyFile
-```
-
----
+Liệt kê Figma components.
 
 ### `map_figma_to_vue`
-
-**Tool chính** — Fetch Figma node và tự động map từng element sang Vue design system component phù hợp nhất.
-
-```
-Input: figma_url, node_id
-Output: Danh sách matches với component name, import path, props, slots, example code
-```
-
-**Ví dụ prompt:**
-```
-Map Figma design này sang Vue components: https://www.figma.com/design/ABC123/MyFile?node-id=1-2
-```
-
-**Output mẫu:**
-```json
-{
-  "totalMatches": 5,
-  "components": [
-    {
-      "figmaNode": "Primary Button (1:23)",
-      "vueComponent": "Button",
-      "import": "import Button from '@/components/design/Button.vue'",
-      "example": "<Button type=\"primary\" size=\"md\" label=\"Click me\" />",
-      "availableProps": "label: String, type: String [primary|secondary|...], size: String [xs|sm|md|lg]"
-    }
-  ],
-  "imports": ["import Button from '@/components/design/Button.vue'"]
-}
-```
-
----
-
-### `generate_vue_code`
-
-Fetch Figma node và generate Vue 3 SFC skeleton hoàn chỉnh với đúng imports và component usage.
-
-```
-Input: figma_url, node_id, component_name (default: FigmaComponent)
-Output: Vue SFC code (.vue file content)
-```
-
-**Ví dụ prompt:**
-```
-Generate Vue component từ Figma node này, đặt tên ProductCard:
-https://www.figma.com/design/ABC123/MyFile?node-id=1-2
-```
-
-**Output mẫu:**
-```vue
-<!-- ProductCard.vue -->
-<template>
-  <div class="flex flex-col gap-4 p-4">
-    <!-- Figma: Card Header (1:10) -->
-    <Typography variant="h4" weight="semi-bold">Product Title</Typography>
-    <!-- Figma: Price Input (1:15) -->
-    <InputMoney v-model:value="price" currency="VND" />
-    <!-- Figma: Save Button (1:20) -->
-    <Button type="primary" size="md" label="Click me" />
-  </div>
-</template>
-
-<script setup>
-  import Typography from '@/components/design/Typography.vue'
-  import InputMoney from '@/components/design/InputMoney.vue'
-  import Button from '@/components/design/Button.vue'
-</script>
-```
-
----
+Map elements → Vue design system components.
 
 ### `list_design_components`
-
-Browse tất cả 62 design system components có sẵn, filter theo tên hoặc category.
-
-```
-Input: filter (regex), category (all|buttons|inputs|select|checkbox|data|navigation|feedback|layout|upload|typography)
-Output: Danh sách components với props, slots, emits, example
-```
-
-**Ví dụ prompt:**
-```
-Liệt kê các input components có sẵn
-Tìm component nào có prop "loading"
-```
-
----
+Browse 62 design components, filter theo category.
 
 ### `get_figma_images`
+Download URLs cho fill images.
 
-Lấy URLs download cho tất cả images/assets sử dụng trong file Figma.
+### `export_nodes`
+Export nodes thành PNG/SVG/PDF. Dùng cho icons, illustrations.
 
-```
-Input: figma_url
-Output: Object { imageRef: downloadUrl }
-```
+### `upload_images`
+Upload URLs → Webcake CDN (`content.pancake.vn`).
 
-## Workflow đề xuất
+## Cách dùng
 
-### Cách 1: Nhanh — Paste link Figma
-
-```
-Implement UI từ Figma design này: https://www.figma.com/design/ABC123/MyFile?node-id=1-2
-```
-
-Claude sẽ tự động:
-1. Gọi `map_figma_to_vue` để match components
-2. Gọi `get_figma_screenshot` để xem visual
-3. Gọi `generate_vue_code` để tạo skeleton
-4. Hoàn thiện code với logic, state, events
-
-### Cách 2: Chi tiết — Từng bước
+Paste Figma link vào AI editor:
 
 ```
-# Bước 1: Xem cấu trúc design
-Lấy node tree: https://www.figma.com/design/ABC123/MyFile?node-id=1-2
-
-# Bước 2: Xem visual
-Screenshot node này
-
-# Bước 3: Map components
-Map sang Vue components
-
-# Bước 4: Generate code
-Generate Vue component tên OrderTable
+Implement this design: https://www.figma.com/design/ABC/File?node-id=1-2
 ```
 
-### Cách 3: Xem components trước
+AI sẽ gọi `get_design_context` → xem screenshot → đọc tree → viết Vue code.
+
+## Element Tree Format
 
 ```
-# Xem tất cả input components
-list_design_components category=inputs
-
-# Tìm component phù hợp
-list_design_components filter="Table"
+FRAME "name" WxH @x,y [row gap:16 pad:12,16,12,16 align:CENTER] bg:#fff rounded:8px shadow(0px 2px 4px #0001)
+  TEXT "Hello" 100x24 @16,12 text-design-body-medium Inter/14px/500 color:#333 lh:22px
+  IMAGE "photo" 200x150 @16,48 img:abc123...
+  SVG "icon" 24x24 @180,12 → export_nodes(node_id="1:23")
+  [bg-effect] "glow" 500x500 @-100,200 linear-gradient(152deg, #f7f2dc 0%, #ffe996 100%) blur:1000px
+  [illustration] "map" 400x300 @0,100 → export_nodes(node_id="2:34")
+  INSTANCE "Button" 120x40 @16,200 [Type=Primary Size=md] → <Button>
 ```
 
-## Component Mapping Logic
-
-Server tự động nhận diện Figma elements dựa trên:
-
-1. **Tên node** — Match regex patterns (vd: node tên "Button" → `Button.vue`)
-2. **Node type** — TEXT nodes → `Typography.vue`, FRAME → layout `<div>`
-3. **Component instance** — Figma component instances → match theo component name
-4. **Font size** — Tự động chọn Typography variant (≥32px → h1, ≥24px → h2, ...)
-5. **Layout mode** — Figma auto-layout → Tailwind flex classes
-
-### Bảng mapping chính
-
-| Figma element chứa | → Vue component |
+| Prefix | Nghĩa |
 |---|---|
-| button, cta, action | `Button` |
-| input, text field, form field | `Input` |
-| search + input | `InputSearch` |
-| money, price, currency | `InputMoney` |
-| textarea, multiline | `TextArea` |
-| select, combobox | `Select` |
-| dropdown, menu | `Dropdown` |
-| checkbox | `Checkbox` |
-| radio | `Radio` / `RadioGroup` |
-| switch, toggle | `Switch` |
-| table | `Table` |
-| tabs, tab bar | `Tabs` |
-| tag, chip, label | `Tags` |
-| badge, count | `Badge` |
-| avatar, profile pic | `Avatar` |
-| modal, dialog, popup | `Modal` |
-| drawer, side panel | `Drawer` |
-| alert, banner, notice | `Alert` |
-| tooltip, hint | `Tooltip` |
-| pagination, pager | `Pagination` |
-| card, container, panel | `Wrapper` |
-| divider, separator | `Divider` |
-| upload, image upload | `ImageUpload` |
-| date picker, calendar | `DatePicker` |
-| steps, stepper | `Steps` |
-| progress | `Progress` |
-| sidebar, side nav | `Sidebar` |
-| segmented | `Segmented` |
-| empty, no data | `Empty` |
-| image, photo | `Image` |
+| `@x,y` | Vị trí relative từ parent |
+| `[row/col ...]` | Auto-layout (flex) |
+| `bg:` | Background color/gradient |
+| `rounded:` | Border radius |
+| `shadow(...)` | CSS box-shadow |
+| `border:` | Border |
+| `opacity:` | Opacity |
+| `text-design-*` | Text CSS class |
+| `lh:` | Line height |
+| `ls:` | Letter spacing |
+| `img:` | Image ref |
+| `→ <Component>` | Vue design component match |
+| `→ export_nodes(...)` | SVG/illustration cần export |
+| `[bg-effect]` | Decorative blur background |
+| `[illustration]` | Vector art group |
 
-## Cấu trúc file
+## Cấu trúc
 
 ```
 mcp/figma-vue/
-├── server.js           # MCP server (8 tools, stdio transport)
-├── component-map.js    # 62 component definitions + Figma matching rules
-├── package.json        # Dependencies
-└── node_modules/       # @modelcontextprotocol/sdk, zod
+├── server.js              # Entry point, tool definitions
+├── install.sh             # Auto-setup cho mọi editor
+├── package.json
+├── README.md
+└── src/
+    ├── utils.js           # hex(), visible(), txt(), json()
+    ├── figma/
+    │   ├── client.js      # Figma API: fetch, parse, render
+    │   ├── simplify.js    # Simplify node tree for JSON output
+    │   ├── upload.js      # Upload images → Webcake CDN
+    │   └── download.js    # Download screenshot to local file
+    ├── design/
+    │   ├── components.js  # 62 Vue component definitions
+    │   ├── matcher.js     # Figma → Vue component matching rules
+    │   └── text.js        # text-design-* class mapping
+    └── context/
+        ├── describe.js    # Node tree → dev-mode description
+        ├── collectors.js  # Collect text + images from tree
+        ├── output.js      # Format output sections
+        └── prompt.js      # Implementation prompt template
 ```
 
 ## Mở rộng
 
-### Thêm component mới
-
-Khi thêm component mới vào `src/components/design/`, cập nhật `component-map.js`:
-
-1. Thêm entry vào `COMPONENT_MAP`:
+Thêm component mới vào `src/design/components.js`:
 ```js
 MyComponent: {
-  import: "import MyComponent from '@/components/design/MyComponent.vue'",
-  props: {
-    label: { type: 'String' },
-    size: { type: 'String', options: ['sm', 'md', 'lg'] },
-  },
+  props: { label: S(), size: S(['sm', 'md', 'lg']) },
   slots: ['default'],
-  example: '<MyComponent label="Hello" size="md" />',
-}
+  ex: '<MyComponent label="Hello" size="md" />',
+},
 ```
 
-2. Thêm matching rule vào `FIGMA_TO_VUE_RULES`:
+Thêm matching rule vào `src/design/matcher.js`:
 ```js
-{ match: (node) => matchName(node, 'my.?component|my.?widget'), component: 'MyComponent' },
-```
-
-### Debug
-
-Chạy server trực tiếp để xem logs:
-
-```bash
-FIGMA_ACCESS_TOKEN=figd_xxx node mcp/figma-vue/server.js
-# Server sẽ listen trên stdin, gửi JSON-RPC messages để test
+R('my.?component|my.?widget', 'MyComponent'),
 ```
