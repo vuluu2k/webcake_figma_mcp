@@ -40,22 +40,15 @@ server.tool('get_design_context',
       try { imageUrlMap = (await api(`/files/${fileKey}/images`)).meta?.images || {} } catch (_) {}
     }
 
-    // Auto-upload to Pancake if WEBCAKE_JWT is set
-    let pancakeUrlMap = {}
+    // Auto-upload to Webcake CDN if WEBCAKE_JWT is set
+    let webcakeUrlMap = {}
     if (images.length && process.env.WEBCAKE_JWT) {
       const figmaUrls = images.map((img) => imageUrlMap[img.ref]).filter(Boolean)
       if (figmaUrls.length) {
         try {
-          const result = await uploadUrls(figmaUrls)
-          // Map figma URL → pancake URL from response
-          if (Array.isArray(result)) {
-            figmaUrls.forEach((fUrl, i) => { if (result[i]) pancakeUrlMap[fUrl] = result[i] })
-          } else if (result?.data) {
-            // Handle { data: [{ url, content_url }] } format
-            for (const item of (Array.isArray(result.data) ? result.data : [result.data])) {
-              if (item.content_url) pancakeUrlMap[item.url || figmaUrls[0]] = item.content_url
-            }
-          }
+          // uploadUrls returns content_urls[] in same order as input urls[]
+          const contentUrls = await uploadUrls(figmaUrls)
+          figmaUrls.forEach((fUrl, i) => { if (contentUrls[i]) webcakeUrlMap[fUrl] = contentUrls[i] })
         } catch (_) { /* non-critical */ }
       }
     }
@@ -67,7 +60,7 @@ server.tool('get_design_context',
     out += describeNode(doc, null).join('\n') + '\n\n'
     if (matches.length) out += buildComponentSection(matches)
     if (texts.length) out += buildTextSection(texts)
-    if (images.length) out += buildImageSection(images, imageUrlMap, pancakeUrlMap)
+    if (images.length) out += buildImageSection(images, imageUrlMap, webcakeUrlMap)
 
     const hasAuto = !!doc.layoutMode
     const hasAbs = doc.children?.some((c) => c.visible !== false && !c.layoutMode && c.absoluteBoundingBox)
@@ -178,12 +171,12 @@ server.tool('export_nodes', 'Export Figma nodes as PNG/SVG/PDF.', {
 
 // ===== upload_images =====
 
-server.tool('upload_images', 'Upload image URLs to Webcake CDN. Converts external URLs (Figma, etc.) to permanent pancake.vn URLs. Requires WEBCAKE_JWT env.', {
+server.tool('upload_images', 'Upload image URLs to Webcake CDN. Converts external URLs to permanent content.pancake.vn URLs. Requires WEBCAKE_JWT env.', {
   urls: z.array(z.string()).describe('Array of image URLs to upload'),
 }, async ({ urls }) => {
   if (!process.env.WEBCAKE_JWT) return txt('Error: WEBCAKE_JWT env required. Set it in .mcp.json')
-  const result = await uploadUrls(urls)
-  return json(result)
+  const contentUrls = await uploadUrls(urls)
+  return json(urls.map((src, i) => ({ src, cdn: contentUrls[i] || null })))
 })
 
 // ===== Start =====
