@@ -1,10 +1,36 @@
 #!/bin/bash
 set -e
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$DIR/../.." && pwd)"
+REPO_URL="https://github.com/pancake-vn/builderx_spa.git"
+MCP_SUBDIR="mcp/figma-vue"
+
+# Detect if running from repo or via curl | bash
+if [ -f "$(dirname "$0")/server.js" ] 2>/dev/null; then
+  DIR="$(cd "$(dirname "$0")" && pwd)"
+  ROOT="$(cd "$DIR/../.." && pwd)"
+else
+  # Running via curl | bash — clone MCP into current project
+  echo "=== Downloading Figma-Vue MCP ==="
+  ROOT="$(pwd)"
+  DIR="$ROOT/$MCP_SUBDIR"
+
+  if [ -d "$DIR" ]; then
+    echo "  → $MCP_SUBDIR already exists, updating..."
+    cd "$DIR" && git pull --quiet 2>/dev/null || true
+  else
+    echo "  → Cloning $MCP_SUBDIR..."
+    mkdir -p "$ROOT/mcp"
+    git clone --depth 1 --filter=blob:none --sparse "$REPO_URL" /tmp/figma-vue-clone 2>/dev/null
+    cd /tmp/figma-vue-clone && git sparse-checkout set "$MCP_SUBDIR" 2>/dev/null
+    cp -r "/tmp/figma-vue-clone/$MCP_SUBDIR" "$DIR"
+    rm -rf /tmp/figma-vue-clone
+  fi
+  echo "  ✓ Downloaded to $DIR"
+fi
+
 SERVER_PATH="$DIR/server.js"
 
+echo ""
 echo "=== Figma-Vue MCP Setup ==="
 echo ""
 

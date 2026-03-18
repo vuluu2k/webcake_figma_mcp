@@ -5,6 +5,12 @@ Custom MCP server cho BuilderX — fetch Figma design → output Vue 3 code vớ
 ## Quick Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/pancake-vn/builderx_spa/master/mcp/figma-vue/install.sh | bash
+```
+
+Hoặc nếu đã clone repo:
+
+```bash
 bash mcp/figma-vue/install.sh
 ```
 
