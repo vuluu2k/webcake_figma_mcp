@@ -15,8 +15,7 @@ async function figmaFetch(path, retries = 0) {
   if (!res.ok) {
     const body = await res.text()
     if (res.status === 429 && retries < 3) {
-      const wait = (retries + 1) * 2000
-      await new Promise((r) => setTimeout(r, wait))
+      await new Promise((r) => setTimeout(r, (retries + 1) * 2000))
       return figmaFetch(path, retries + 1)
     }
     throw new Error(`Figma API ${res.status}: ${body}`)
@@ -44,58 +43,22 @@ async function fetchNode(fileKey, nodeId, depth = 15) {
   return data.document
 }
 
-const txt = (text) => ({ content: [{ type: 'text', text }] })
-const json = (obj) => txt(JSON.stringify(obj, null, 2))
-
-// Simplify Figma node tree — strip invisible, flatten styles
-function simplify(node) {
-  const r = { id: node.id, name: node.name, type: node.type }
-
-  if (node.absoluteBoundingBox) {
-    const b = node.absoluteBoundingBox
-    r.bounds = { x: b.x | 0, y: b.y | 0, w: b.width | 0, h: b.height | 0 }
-  }
-
-  if (node.layoutMode) {
-    r.layout = {
-      mode: node.layoutMode, gap: node.itemSpacing,
-      padding: [node.paddingTop, node.paddingRight, node.paddingBottom, node.paddingLeft],
-      align: node.primaryAxisAlignItems, cross: node.counterAxisAlignItems,
+async function fetchScreenshot(fileKey, nodeId, scale = 1) {
+  for (let s = scale; s >= 0.5; s = s > 1 ? s - 1 : s * 0.5) {
+    try {
+      const data = await figmaFetch(`/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&scale=${s}&format=png`)
+      const url = data.images?.[nodeId]
+      if (url) return { url, scale: s }
+    } catch (e) {
+      if (e.message.includes('timeout') || e.message.includes('Render timeout')) continue
+      throw e
     }
   }
-
-  const fills = node.fills?.filter((f) => f.visible !== false)
-  if (fills?.length) {
-    r.fills = fills.map((f) =>
-      f.type === 'SOLID' ? { type: 'solid', color: hex(f.color, f.opacity) }
-        : f.type === 'IMAGE' ? { type: 'image', ref: f.imageRef }
-          : { type: f.type },
-    )
-  }
-
-  const strokes = node.strokes?.filter((s) => s.visible !== false)
-  if (strokes?.length) r.strokes = strokes.map((s) => ({ color: hex(s.color, s.opacity), w: node.strokeWeight }))
-
-  if (node.cornerRadius) r.radius = node.cornerRadius
-  else if (node.rectangleCornerRadii) r.radius = node.rectangleCornerRadii
-
-  const fx = node.effects?.filter((e) => e.visible !== false)
-  if (fx?.length) r.effects = fx.map((e) => ({ type: e.type, color: e.color ? hex(e.color) : undefined, offset: e.offset, radius: e.radius }))
-
-  if (node.type === 'TEXT') {
-    const s = node.style || {}
-    r.text = { chars: node.characters, size: s.fontSize, family: s.fontFamily, weight: s.fontWeight, align: s.textAlignHorizontal }
-  }
-
-  if (node.componentId) r.componentId = node.componentId
-  if (node.componentProperties) r.compProps = node.componentProperties
-
-  if (node.children) {
-    const visible = node.children.filter((c) => c.visible !== false)
-    if (visible.length) r.children = visible.map(simplify)
-  }
-  return r
+  return null
 }
+
+const txt = (text) => ({ content: [{ type: 'text', text }] })
+const json = (obj) => txt(JSON.stringify(obj, null, 2))
 
 function hex(c, opacity) {
   if (!c) return undefined
@@ -104,357 +67,414 @@ function hex(c, opacity) {
   return a < 1 ? `rgba(${r},${g},${b},${a.toFixed(2)})` : `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`
 }
 
-// ===== Vue Code Generation (pixel-faithful) =====
-
-const FONT_VARIANTS = [[32, 'h1'], [24, 'h2'], [20, 'h3'], [18, 'h4'], [16, 'body'], [14, 'body-sm'], [12, 'footnote'], [0, 'footnote-sm']]
-const FONT_WEIGHTS = [[700, 'bold'], [600, 'semi-bold'], [500, 'medium'], [400, 'regular'], [300, 'light']]
-const ALIGN_MAP = { CENTER: 'justify-center', MAX: 'justify-end', SPACE_BETWEEN: 'justify-between' }
-const CROSS_MAP = { CENTER: 'items-center', MAX: 'items-end' }
-
-// Tailwind spacing: round px to nearest Tailwind unit
-const tw = (px) => {
-  if (!px || px < 0) return 0
-  // Tailwind spacing: 1=4px. Use exact value for common sizes, bracket for odd ones
-  const unit = Math.round(px / 4)
-  return unit || 1
-}
-const twVal = (px) => {
-  if (!px || px < 0) return null
-  const unit = Math.round(px / 4)
-  // Standard Tailwind values
-  if (unit > 0 && unit <= 96) return `${unit}`
-  // Use arbitrary value for large sizes
-  return `[${Math.round(px)}px]`
-}
-
-// Map Figma color to closest Tailwind color or arbitrary
-const TW_COLORS = {
-  '#ffffff': 'white', '#000000': 'black', '#f9fafb': 'gray-50', '#f3f4f6': 'gray-100',
-  '#e5e7eb': 'gray-200', '#d1d5db': 'gray-300', '#9ca3af': 'gray-400', '#6b7280': 'gray-500',
-  '#4b5563': 'gray-600', '#374151': 'gray-700', '#1f2937': 'gray-800', '#111827': 'gray-900',
-  '#ef4444': 'red-500', '#f97316': 'orange-500', '#eab308': 'yellow-500', '#22c55e': 'green-500',
-  '#3b82f6': 'blue-500', '#6366f1': 'indigo-500', '#8b5cf6': 'violet-500',
-}
-function twColor(hex) {
-  if (!hex) return null
-  return TW_COLORS[hex] || `[${hex}]`
-}
-
-function typoVariant(node) {
-  const size = node.text?.size || node.style?.fontSize
-  if (!size) return null
-  for (const [min, v] of FONT_VARIANTS) if (size >= min) return v
-  return 'footnote-sm'
-}
-
-function typoWeight(node) {
-  const w = node.text?.weight || node.style?.fontWeight
-  if (!w) return null
-  for (const [min, v] of FONT_WEIGHTS) if (w >= min) return v
-  return 'regular'
-}
-
-function nodeClasses(node) {
-  const cls = []
-  const layout = node.layout
-  const mode = layout?.mode
-
-  // Flex layout
-  if (mode) {
-    cls.push(mode === 'HORIZONTAL' ? 'flex' : 'flex flex-col')
-    const gap = layout.gap
-    if (gap > 0) { const g = twVal(gap); if (g) cls.push(`gap-${g}`) }
-    if (ALIGN_MAP[layout.align]) cls.push(ALIGN_MAP[layout.align])
-    if (CROSS_MAP[layout.cross]) cls.push(CROSS_MAP[layout.cross])
-
-    // Padding
-    const [pt, pr, pb, pl] = (layout.padding || []).map((v) => twVal(v || 0))
-    if (pt && pt === pr && pr === pb && pb === pl && pt !== '0') cls.push(`p-${pt}`)
-    else {
-      if (pt && pt === pb && pt !== '0') cls.push(`py-${pt}`)
-      else { if (pt && pt !== '0') cls.push(`pt-${pt}`); if (pb && pb !== '0') cls.push(`pb-${pb}`) }
-      if (pl && pl === pr && pl !== '0') cls.push(`px-${pl}`)
-      else { if (pl && pl !== '0') cls.push(`pl-${pl}`); if (pr && pr !== '0') cls.push(`pr-${pr}`) }
+// ===== Simplify node =====
+function simplify(node) {
+  const r = { id: node.id, name: node.name, type: node.type }
+  if (node.absoluteBoundingBox) {
+    const b = node.absoluteBoundingBox
+    r.bounds = { x: b.x | 0, y: b.y | 0, w: b.width | 0, h: b.height | 0 }
+  }
+  if (node.layoutMode) {
+    r.layout = {
+      mode: node.layoutMode, gap: node.itemSpacing,
+      padding: [node.paddingTop, node.paddingRight, node.paddingBottom, node.paddingLeft],
+      align: node.primaryAxisAlignItems, cross: node.counterAxisAlignItems,
     }
   }
-
-  // Dimensions
-  if (node.bounds) {
-    const w = twVal(node.bounds.w)
-    const h = twVal(node.bounds.h)
-    // Only add explicit sizes for non-auto-layout or root-level containers
-    if (!mode && w && node.type !== 'TEXT') cls.push(`w-${w}`)
-    if (!mode && h && node.type !== 'TEXT') cls.push(`h-${h}`)
+  const fills = node.fills?.filter((f) => f.visible !== false)
+  if (fills?.length) {
+    r.fills = fills.map((f) =>
+      f.type === 'SOLID' ? { type: 'solid', color: hex(f.color, f.opacity) }
+        : f.type === 'IMAGE' ? { type: 'image', ref: f.imageRef }
+          : { type: f.type },
+    )
   }
-
-  // Background
-  const fill = node.fills?.[0]
-  if (fill?.type === 'solid' && fill.color) {
-    const c = twColor(fill.color)
-    if (c && c !== 'white') cls.push(`bg-${c}`)
+  const strokes = node.strokes?.filter((s) => s.visible !== false)
+  if (strokes?.length) r.strokes = strokes.map((s) => ({ color: hex(s.color, s.opacity), w: node.strokeWeight }))
+  if (node.cornerRadius) r.radius = node.cornerRadius
+  else if (node.rectangleCornerRadii) r.radius = node.rectangleCornerRadii
+  const fx = node.effects?.filter((e) => e.visible !== false)
+  if (fx?.length) r.effects = fx.map((e) => ({ type: e.type, color: e.color ? hex(e.color) : undefined, offset: e.offset, radius: e.radius }))
+  if (node.type === 'TEXT') {
+    const s = node.style || {}
+    r.text = { chars: node.characters, size: s.fontSize, family: s.fontFamily, weight: s.fontWeight, align: s.textAlignHorizontal }
   }
-
-  // Border radius
-  if (node.radius) {
-    const r = typeof node.radius === 'number' ? node.radius : node.radius[0]
-    if (r > 0) {
-      if (r >= 9999) cls.push('rounded-full')
-      else {
-        const rv = twVal(r)
-        cls.push(rv === '1' ? 'rounded' : rv === '2' ? 'rounded-lg' : rv === '3' ? 'rounded-xl' : `rounded-${rv}`)
-      }
-    }
+  if (node.componentId) r.componentId = node.componentId
+  if (node.componentProperties) r.compProps = node.componentProperties
+  if (node.children) {
+    const visible = node.children.filter((c) => c.visible !== false)
+    if (visible.length) r.children = visible.map(simplify)
   }
-
-  // Border
-  if (node.strokes?.length) {
-    const s = node.strokes[0]
-    cls.push('border')
-    if (s.color) cls.push(`border-${twColor(s.color)}`)
-  }
-
-  // Shadow
-  const shadow = node.effects?.find((e) => e.type === 'DROP_SHADOW')
-  if (shadow) {
-    const r = shadow.radius || 0
-    if (r <= 3) cls.push('shadow-sm')
-    else if (r <= 6) cls.push('shadow')
-    else if (r <= 15) cls.push('shadow-md')
-    else if (r <= 25) cls.push('shadow-lg')
-    else cls.push('shadow-xl')
-  }
-
-  // Overflow
-  if (node.clipsContent) cls.push('overflow-hidden')
-
-  return cls.join(' ')
+  return r
 }
 
-// Build real component props from Figma node data
-function buildCompProps(compName, node, rawNode) {
-  const text = extractText(rawNode || node)
+// text-design SCSS class mapping (from src/style/view/design/text_design.scss)
+// Levels: h0(48px) h1(38px) h2(30px) h3(24px) h4(20px) h5(16px) body(14px) body-sm(13px) footnote(12px) footnote-sm(10px)
+// Weights: light(300) regular(400) medium(500) semibold(600) bold(700)
+const TD_LEVELS = [[48, 'h0'], [38, 'h1'], [30, 'h2'], [24, 'h3'], [20, 'h4'], [16, 'h5'], [14, 'body'], [13, 'body-sm'], [12, 'footnote'], [0, 'footnote-sm']]
+const TD_WEIGHTS = [[700, 'bold'], [600, 'semibold'], [500, 'medium'], [400, 'regular'], [300, 'light']]
 
-  switch (compName) {
-    case 'Button': {
-      const label = text || node.name?.replace(/_?button.*/i, '').replace(/^_/, '').trim() || 'Button'
-      const type = /danger|delete|remove/i.test(node.name) ? 'danger'
-        : /secondary|outline|ghost/i.test(node.name) ? 'secondary'
-          : /warning/i.test(node.name) ? 'warning' : 'primary'
-      const size = guessSize(node)
-      return `<Button type="${type}" size="${size}" label="${esc(label)}" />`
-    }
-    case 'Input': {
-      const label = extractLabel(rawNode || node)
-      const ph = text || 'Enter value'
-      return `<Input v-model:value="form.value" ${label ? `label="${esc(label)}" ` : ''}placeholder="${esc(ph)}" />`
-    }
-    case 'Checkbox': {
-      const label = text || node.name || 'Option'
-      return `<Checkbox v-model:checked="checked" label="${esc(label)}" />`
-    }
-    case 'Tags': {
-      const label = text || node.name || 'Tag'
-      const type = /success|active|connect/i.test(label) ? 'success'
-        : /error|fail|disconnect/i.test(label) ? 'error'
-          : /warn/i.test(label) ? 'warning'
-            : /info/i.test(label) ? 'info' : 'secondary'
-      return `<Tags type="${type}" size="md">${esc(label)}</Tags>`
-    }
-    case 'Badge': {
-      return `<Badge :count="0" type="error" />`
-    }
-    case 'Avatar': {
-      const size = node.bounds ? Math.min(node.bounds.w, node.bounds.h) : 32
-      return `<Avatar :src="avatarUrl" :size="${Math.round(size)}" />`
-    }
-    case 'Image': {
-      const w = node.bounds?.w || 200
-      const h = node.bounds?.h || 150
-      const ref = node.fills?.find((f) => f.type === 'image')?.ref
-      return `<Image :src="${ref ? `'figma:${ref}'` : 'imageUrl'}" :width="${Math.round(w)}" :height="${Math.round(h)}" alt="${esc(node.name)}" />`
-    }
-    case 'Sidebar': {
-      return `<Sidebar v-model:value="activeMenu" :options="sidebarOptions" />`
-    }
-    case 'Dropdown': {
-      return `<Dropdown :options="dropdownOptions" :trigger="['click']">\n      <slot />\n    </Dropdown>`
-    }
-    case 'Modal': {
-      const title = text || node.name || 'Modal'
-      return `<Modal v-model:visible="showModal" title="${esc(title)}">\n      <slot />\n    </Modal>`
-    }
-    case 'Table': {
-      return `<Table :columns="columns" :data-source="dataSource" :loading="loading">\n      <template #bodyCell="{ column, record }">\n        <!-- cell content -->\n      </template>\n    </Table>`
-    }
-    case 'Select': {
-      const title = extractLabel(rawNode || node)
-      return `<Select v-model:value="selectedValue" :options="options" ${title ? `title="${esc(title)}"` : ''} />`
-    }
-    case 'Switch': {
-      const label = text || node.name || ''
-      return `<Switch v-model:checked="enabled" ${label ? `label="${esc(label)}"` : ''} />`
-    }
-    case 'Tooltip': {
-      return `<Tooltip><template #title>${text || 'Tooltip'}</template><slot /></Tooltip>`
-    }
-    case 'Alert': {
-      const title = text || node.name || 'Alert'
-      return `<Alert type="info" title="${esc(title)}" />`
-    }
-    case 'Pagination': {
-      return `<Pagination v-model:current="page" :total="total" />`
-    }
-    case 'Tabs': {
-      return `<Tabs :options="tabOptions" size="md" />`
-    }
-    default: {
-      const comp = COMPONENT_MAP[compName]
-      return comp?.ex || `<${compName} />`
+function textDesignClass(fontSize, fontWeight) {
+  let level = 'body'
+  if (fontSize) {
+    for (const [min, name] of TD_LEVELS) {
+      if (fontSize >= min) { level = name; break }
     }
   }
+  let weight = 'regular'
+  if (fontWeight) {
+    for (const [min, name] of TD_WEIGHTS) {
+      if (fontWeight >= min) { weight = name; break }
+    }
+  }
+  return `text-design-${level}-${weight}`
 }
 
-function esc(s) { return (s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;') }
+// ===== Design context: structured description for LLM =====
+function describeNode(node, parentBounds, depth = 0) {
+  const indent = '  '.repeat(depth)
+  const lines = []
+  const b = node.absoluteBoundingBox
+  const w = b ? Math.round(b.width) : 0
+  const h = b ? Math.round(b.height) : 0
 
-function guessSize(node) {
-  const h = node.bounds?.h || 0
-  if (h <= 24) return 'xs'
-  if (h <= 32) return 'sm'
-  if (h <= 40) return 'md'
-  return 'lg'
-}
+  // Skip decorative/illustration elements
+  if (isDecorative(node)) {
+    lines.push(`${indent}[decorative] ${node.type} "${node.name}" ${w}x${h} (skip)`)
+    return lines
+  }
+  // Skip individual vectors (part of illustrations) — only keep if they have image fills
+  if (node.type === 'VECTOR' && !node.fills?.some((f) => f.visible !== false && f.type === 'IMAGE')) {
+    return lines
+  }
 
-// Walk raw Figma node tree to extract text
-function extractText(node) {
-  if (!node) return ''
-  if (node.type === 'TEXT') return node.characters || node.text?.chars || ''
+  // Position relative to parent
+  let pos = ''
+  if (b && parentBounds) {
+    const relX = Math.round(b.x - parentBounds.x)
+    const relY = Math.round(b.y - parentBounds.y)
+    pos = ` at (${relX}, ${relY})`
+  }
+
+  // LINE → Divider
+  if (node.type === 'LINE') {
+    lines.push(`${indent}LINE "${node.name}" ${w}x${h}${pos} → <Divider />`)
+    return lines
+  }
+
+  // Basic info
+  let desc = `${indent}${node.type} "${node.name}" ${w}x${h}${pos}`
+
+  // Layout info
+  if (node.layoutMode) {
+    desc += ` [${node.layoutMode === 'HORIZONTAL' ? 'row' : 'col'}`
+    if (node.itemSpacing) desc += ` gap:${Math.round(node.itemSpacing)}`
+    const pad = [node.paddingTop, node.paddingRight, node.paddingBottom, node.paddingLeft].filter(Boolean)
+    if (pad.length) desc += ` pad:${pad.map(Math.round).join(',')}`
+    if (node.primaryAxisAlignItems) desc += ` align:${node.primaryAxisAlignItems}`
+    if (node.counterAxisAlignItems) desc += ` cross:${node.counterAxisAlignItems}`
+    desc += ']'
+  }
+
+  // Visual properties
+  const fills = node.fills?.filter((f) => f.visible !== false) || []
+  for (const f of fills) {
+    if (f.type === 'SOLID') desc += ` bg:${hex(f.color, f.opacity)}`
+    else if (f.type === 'IMAGE') desc += ` img:${f.imageRef?.slice(0, 12)}...`
+    else if (f.type?.includes('GRADIENT')) desc += ` gradient`
+  }
+  const strokes = node.strokes?.filter((s) => s.visible !== false) || []
+  if (strokes.length) desc += ` border:${hex(strokes[0].color)}/${node.strokeWeight}px`
+  if (node.cornerRadius) desc += ` rounded:${node.cornerRadius}px`
+  if (node.effects?.some((e) => e.visible !== false && e.type === 'DROP_SHADOW')) desc += ` shadow`
+  if (node.opacity != null && node.opacity < 1) desc += ` opacity:${node.opacity}`
+  if (node.clipsContent) desc += ` clip`
+
+  // Text — output text-design class
+  if (node.type === 'TEXT' && node.characters) {
+    const s = node.style || {}
+    const tdClass = textDesignClass(s.fontSize, s.fontWeight)
+    desc += ` "${node.characters}" ${tdClass}`
+    desc += ` (${s.fontFamily}/${s.fontSize}px/${s.fontWeight})`
+    if (s.textAlignHorizontal && s.textAlignHorizontal !== 'LEFT') desc += ` align:${s.textAlignHorizontal}`
+    const textFill = fills.find((f) => f.type === 'SOLID')
+    if (textFill) desc += ` color:${hex(textFill.color, textFill.opacity)}`
+  }
+
+  // Component match
+  const compMatch = matchVueComponent(node)
+  if (compMatch) desc += ` → <${compMatch}>`
+
+  lines.push(desc)
+
+  // Children
   if (node.children) {
     for (const child of node.children) {
       if (child.visible === false) continue
-      const t = extractText(child)
-      if (t) return t
+      lines.push(...describeNode(child, b, depth + 1))
     }
   }
-  return ''
+  return lines
 }
 
-// Extract label from sibling or parent text node
-function extractLabel(node) {
-  if (!node) return ''
+function isDecorative(node) {
+  // Ellipses/shapes with blur effects = decorative background
+  if (['ELLIPSE'].includes(node.type)) {
+    const hasBlur = node.effects?.some((e) => e.visible !== false && (e.type === 'LAYER_BLUR' || e.type === 'BACKGROUND_BLUR'))
+    if (hasBlur) return true
+  }
+  // Groups full of vectors = illustration/decoration (maps, complex SVG art)
+  if (node.type === 'GROUP' && node.children) {
+    const kids = node.children.filter((c) => c.visible !== false)
+    const vectors = kids.filter((c) => c.type === 'VECTOR' || (c.type === 'GROUP' && isVectorGroup(c)))
+    if (kids.length > 5 && vectors.length > kids.length * 0.7) return true
+    // Empty groups
+    const meaningful = kids.filter((c) => !isDecorative(c))
+    if (meaningful.length === 0) return true
+  }
+  return false
+}
+
+function isVectorGroup(node) {
+  if (!node.children) return false
+  const kids = node.children.filter((c) => c.visible !== false)
+  return kids.length > 0 && kids.every((c) => c.type === 'VECTOR' || (c.type === 'GROUP' && isVectorGroup(c)))
+}
+
+function matchVueComponent(node) {
+  // Quick match using the same rules as component-map
+  const name = node.name || ''
+  const n = name.toLowerCase()
+  if (/button/i.test(n) && !/radio|checkbox|switch|toggle/i.test(n)) return 'Button'
+  if (/sidebar/i.test(n)) return 'Sidebar'
+  if (/checkbox/i.test(n)) return 'Checkbox'
+  if (/dropdown/i.test(n)) return 'Dropdown'
+  if (/avatar/i.test(n)) return 'Avatar'
+  if (/badge/i.test(n)) return 'Badge'
+  if (/modal|dialog/i.test(n)) return 'Modal'
+  if (/table/i.test(n) && node.type === 'FRAME') return 'Table'
+  if (/tabs|tab.?bar/i.test(n)) return 'Tabs'
+  if (/switch|toggle/i.test(n)) return 'Switch'
+  if (/select|combobox/i.test(n) && !/date|tree/i.test(n)) return 'Select'
+  if (/input|text.?field/i.test(n) && !/search/i.test(n)) return 'Input'
+  if (/search/i.test(n)) return 'InputSearch'
+  if (/alert|banner/i.test(n)) return 'Alert'
+  if (/tag|chip/i.test(n) && !/input/i.test(n)) return 'Tags'
+  if (/pagination/i.test(n)) return 'Pagination'
+  if (/drawer/i.test(n)) return 'Drawer'
+  if (/image|photo|picture/i.test(n) && !/upload/i.test(n)) return 'Image'
+  return null
+}
+
+function collectAllText(node, results = []) {
+  if (node.type === 'TEXT' && node.characters && node.visible !== false) {
+    const s = node.style || {}
+    results.push({
+      text: node.characters,
+      font: s.fontFamily, size: s.fontSize, weight: s.fontWeight,
+      color: node.fills?.find((f) => f.type === 'SOLID' && f.visible !== false)?.color ? hex(node.fills.find((f) => f.type === 'SOLID').color) : null,
+    })
+  }
   if (node.children) {
     for (const child of node.children) {
-      if (child.type === 'TEXT' && child.visible !== false) {
-        const t = child.characters || child.text?.chars || ''
-        if (t && t.length < 50) return t
-      }
+      if (child.visible !== false) collectAllText(child, results)
     }
   }
-  return ''
+  return results
 }
 
-// Collect image refs from node tree
-function collectImageRefs(node, refs = new Set()) {
-  if (node.fills) {
-    for (const f of node.fills) {
-      if (f.type === 'image' || f.type === 'IMAGE') refs.add(f.ref || f.imageRef)
-    }
+function collectAllImages(node, parentBounds, results = []) {
+  const fills = node.fills?.filter((f) => f.visible !== false && f.type === 'IMAGE') || []
+  if (fills.length && node.absoluteBoundingBox) {
+    const b = node.absoluteBoundingBox
+    results.push({
+      ref: fills[0].imageRef,
+      name: node.name,
+      w: Math.round(b.width), h: Math.round(b.height),
+      x: parentBounds ? Math.round(b.x - parentBounds.x) : 0,
+      y: parentBounds ? Math.round(b.y - parentBounds.y) : 0,
+    })
   }
   if (node.children) {
-    for (const child of node.children) collectImageRefs(child, refs)
-  }
-  return refs
-}
-
-function genTemplate(node, matchMap, rawMap, indent = 1) {
-  const sp = '  '.repeat(indent)
-  const match = matchMap.get(node.id)
-
-  if (match) {
-    const raw = rawMap?.get(node.id)
-    const rendered = buildCompProps(match, node, raw)
-    return `${sp}<!-- ${node.name} -->\n${sp}${rendered}\n`
-  }
-
-  if (node.type === 'TEXT') {
-    const chars = node.text?.chars || node.chars || node.name || ''
-    const v = typoVariant(node)
-    const w = typoWeight(node)
-    const color = node.fills?.[0]?.color ? twColor(node.fills[0].color) : null
-    const align = node.text?.align
-    const alignCls = align === 'CENTER' ? ' text-center' : align === 'RIGHT' ? ' text-right' : ''
-    const colorCls = color && color !== 'black' && color !== 'white' ? ` text-${color}` : ''
-    if (v) {
-      return `${sp}<Typography variant="${v}"${w && w !== 'regular' ? ` weight="${w}"` : ''}${colorCls ? ` class="${colorCls.trim()}"` : ''}>${esc(chars)}</Typography>\n`
+    for (const child of node.children) {
+      if (child.visible !== false) collectAllImages(child, parentBounds || node.absoluteBoundingBox, results)
     }
-    return `${sp}<span class="text-sm${alignCls}${colorCls}">${esc(chars)}</span>\n`
   }
-
-  // Image fill on non-component node
-  const imgFill = node.fills?.find((f) => f.type === 'image')
-  if (imgFill && !node.children?.length) {
-    const w = node.bounds?.w || 100
-    const h = node.bounds?.h || 100
-    return `${sp}<Image :src="'figma:${imgFill.ref}'" :width="${Math.round(w)}" :height="${Math.round(h)}" alt="${esc(node.name)}" />\n`
-  }
-
-  if (!node.children?.length) return ''
-
-  const kids = node.children.filter((c) => c.visible !== false)
-  const cls = nodeClasses(node)
-  if (!cls) {
-    return kids.map((c) => genTemplate(c, matchMap, rawMap, indent)).join('')
-  }
-  return `${sp}<div class="${cls}">\n${kids.map((c) => genTemplate(c, matchMap, rawMap, indent + 1)).join('')}${sp}</div>\n`
-}
-
-function generateVue(matches, nodeTree, rawDoc, fileKey) {
-  const matchMap = new Map(matches.map((m) => [m.id, m.comp]))
-
-  // Build raw node lookup for extracting text from original Figma data
-  const rawMap = new Map()
-  function indexRaw(node) {
-    if (!node) return
-    rawMap.set(node.id, node)
-    if (node.children) node.children.forEach(indexRaw)
-  }
-  indexRaw(rawDoc)
-
-  const body = genTemplate(nodeTree, matchMap, rawMap)
-
-  // Collect imports
-  const usedComps = new Set()
-  matchMap.forEach((comp) => usedComps.add(comp))
-  // Check if Typography/Image are used in template (text nodes, image fills)
-  if (body.includes('<Typography')) usedComps.add('Typography')
-  if (body.includes('<Image')) usedComps.add('Image')
-  const imports = [...usedComps].map((c) => COMPONENT_MAP[c]?.import).filter(Boolean).sort()
-
-  // Collect image refs for asset download
-  const imageRefs = [...collectImageRefs(nodeTree)]
-
-  let code = `<template>\n${body}</template>\n\n<script setup>\n`
-  code += imports.map((i) => `  ${i}`).join('\n')
-  code += `\n</script>\n`
-
-  if (imageRefs.length) {
-    code += `\n<!-- Image assets from Figma (use get_figma_images to get download URLs):\n`
-    code += imageRefs.map((r) => `     ${r}`).join('\n')
-    code += `\n-->\n`
-  }
-
-  return code
+  return results
 }
 
 // ===== MCP Server =====
 const server = new McpServer({
   name: 'figma-vue',
-  version: '1.0.0',
+  version: '2.0.0',
   description: 'Figma → Vue 3 MCP using @/components/design/',
 })
 
 const urlParam = z.string().describe('Figma URL or file key')
 const nodeParam = z.string().optional().describe('Node ID (e.g. "1:2" or "1-2"), optional if in URL')
 
+// ---------- MAIN TOOL: get_design_context ----------
+server.tool('get_design_context',
+  `Fetch complete design context from Figma for implementing in Vue 3. Returns:
+- Screenshot URL for visual reference
+- Structured tree description with positions, styles, text, colors
+- Vue component mapping (which elements map to @/components/design/)
+- All text content with font info
+- All image assets with refs
+USE THIS TOOL FIRST when implementing a Figma design.`,
+  {
+    figma_url: urlParam, node_id: nodeParam,
+  },
+  async ({ figma_url, node_id }) => {
+    const { fileKey, nodeId } = resolveId(figma_url, node_id)
+    const doc = await fetchNode(fileKey, nodeId)
+    if (!doc) return txt('Node not found')
+
+    // Get screenshot
+    const screenshot = nodeId ? await fetchScreenshot(fileKey, nodeId).catch(() => null) : null
+
+    // Tree description
+    const tree = describeNode(doc, null)
+
+    // Component matches
+    const matches = mapFigmaToComponents(doc)
+    const imports = [...new Set(matches.map((m) => COMPONENT_MAP[m.comp]?.import).filter(Boolean))]
+
+    // All text
+    const texts = collectAllText(doc)
+
+    // All images — collect refs then batch-resolve URLs
+    const images = collectAllImages(doc, doc.absoluteBoundingBox)
+    let imageUrlMap = {}
+    if (images.length) {
+      try {
+        const imgData = await figmaFetch(`/files/${fileKey}/images`)
+        imageUrlMap = imgData.meta?.images || {}
+      } catch (_) { /* non-critical */ }
+    }
+
+    // Root info
+    const b = doc.absoluteBoundingBox
+    const rootW = b ? Math.round(b.width) : 0
+    const rootH = b ? Math.round(b.height) : 0
+
+    let output = `# Design Context: ${doc.name}\n`
+    output += `Size: ${rootW}x${rootH}px\n`
+    if (screenshot) output += `Screenshot: ${screenshot.url}\n`
+    output += `\n`
+
+    output += `## Element Tree\n`
+    output += `(format: TYPE "name" WxH at(x,y) [layout] styles → <VueComponent>)\n\n`
+    output += tree.join('\n') + '\n\n'
+
+    if (matches.length) {
+      output += `## Vue Component Mapping (${matches.length} matches)\n\n`
+      // Deduplicate by component
+      const byComp = {}
+      for (const m of matches) {
+        if (!byComp[m.comp]) byComp[m.comp] = []
+        byComp[m.comp].push(m.name)
+      }
+      for (const [comp, nodes] of Object.entries(byComp)) {
+        const c = COMPONENT_MAP[comp]
+        output += `### ${comp} (${nodes.length}x)\n`
+        output += `Import: ${c?.import}\n`
+        output += `Example: ${c?.ex}\n`
+        if (c?.props) output += `Props: ${Object.entries(c.props).map(([k, v]) => `${k}:${v.type}${v.options ? `[${v.options}]` : ''}`).join(', ')}\n`
+        if (c?.slots?.length) output += `Slots: ${c.slots.join(', ')}\n`
+        output += `Nodes: ${nodes.slice(0, 5).join(', ')}${nodes.length > 5 ? ` (+${nodes.length - 5} more)` : ''}\n\n`
+      }
+      output += `All imports:\n${imports.join('\n')}\n\n`
+    }
+
+    if (texts.length) {
+      output += `## Text Content (${texts.length} elements)\n\n`
+      for (const t of texts) {
+        const cls = textDesignClass(t.size, t.weight)
+        output += `- "${t.text}" → \`${cls}\` (${t.font}/${t.size}px/${t.weight}) ${t.color || ''}\n`
+      }
+      output += '\n'
+    }
+
+    if (images.length) {
+      output += `## Image Assets (${images.length})\n\n`
+      for (const img of images) {
+        const url = imageUrlMap[img.ref]
+        output += `- "${img.name}" ${img.w}x${img.h} at(${img.x},${img.y})\n`
+        output += `  ref: ${img.ref}\n`
+        if (url) output += `  url: ${url}\n`
+      }
+      output += '\n'
+    }
+
+    // Detect layout type for prompt hints
+    const hasAutoLayout = !!doc.layoutMode
+    const hasAbsoluteKids = doc.children?.some((c) => c.visible !== false && !c.layoutMode && c.absoluteBoundingBox)
+
+    output += `## Implementation Prompt\n\n`
+    output += `You MUST implement this Figma design as a Vue 3 SFC that is visually identical to the screenshot above.\n\n`
+
+    output += `### Step 1: Analyze the screenshot\n`
+    output += `- Open/view the screenshot URL to understand the full visual layout\n`
+    output += `- Identify the visual hierarchy: what is background, what is foreground, what overlaps\n`
+    output += `- Note the overall composition: ${hasAutoLayout ? 'uses auto-layout (flexbox)' : hasAbsoluteKids ? 'uses absolute positioning (elements overlap)' : 'mixed layout'}\n\n`
+
+    output += `### Step 2: Build the layout structure\n`
+    output += `- Use Tailwind CSS utility classes for ALL styling (no inline styles, no <style> block)\n`
+    output += `- For auto-layout frames: use \`flex\`, \`flex-col\`, \`gap-N\`, \`p-N\`, \`items-center\`, \`justify-between\` etc.\n`
+    output += `- For overlapping/absolute elements: use \`relative\` on parent, \`absolute\` + \`top-N left-N\` on children\n`
+    output += `- Match exact dimensions from the Element Tree (WxH). Use \`w-[Npx]\` \`h-[Npx]\` for non-standard sizes\n`
+    output += `- Match exact spacing/gaps from the tree. Convert px to Tailwind: 4px=1, 8px=2, 12px=3, 16px=4, 20px=5, 24px=6, 32px=8\n\n`
+
+    output += `### Step 3: Apply visual styles\n`
+    output += `- Colors: use exact hex values from the tree with Tailwind arbitrary \`bg-[#hex]\` \`text-[#hex]\`\n`
+    output += `- Border radius: \`rounded-[Npx]\` from the tree's "rounded:Npx"\n`
+    output += `- Shadows: map tree "shadow" to Tailwind \`shadow-sm\` / \`shadow\` / \`shadow-md\` / \`shadow-lg\`\n`
+    output += `- Borders: \`border border-[#hex]\` from tree "border:#hex"\n`
+    output += `- Opacity: \`opacity-N\` from tree "opacity:N"\n`
+    output += `- Overflow: \`overflow-hidden\` when tree shows "clip"\n\n`
+
+    output += `### Step 4: Use design system components\n`
+    output += `- ALWAYS use components from \`@/components/design/\` instead of raw HTML when a match exists\n`
+    output += `- The Component Mapping section above shows which elements → which Vue components\n`
+    output += `- Use the exact props, slots, and examples shown for each component\n`
+    output += `- Import all used components in \`<script setup>\`\n\n`
+
+    output += `### Step 5: Handle text faithfully\n`
+    output += `- Use \`text-design-{level}-{weight}\` CSS classes from the design system (NOT the <Typography> component)\n`
+    output += `- Each TEXT node in the Element Tree already shows its exact class (e.g. \`text-design-h3-semibold\`)\n`
+    output += `- Level by font size: ≥48px→h0, ≥38px→h1, ≥30px→h2, ≥24px→h3, ≥20px→h4, ≥16px→h5, ≥14px→body, ≥13px→body-sm, ≥12px→footnote, <12px→footnote-sm\n`
+    output += `- Weight: 300→light, 400→regular, 500→medium, 600→semibold, 700→bold\n`
+    output += `- Example: \`<span class="text-design-h3-semibold">Title</span>\`\n`
+    output += `- Use the EXACT text content from the Text Content section — do NOT change or translate\n`
+    output += `- For text color, add Tailwind color class: \`<span class="text-design-body-medium text-[#hex]">text</span>\`\n\n`
+
+    output += `### Step 6: Handle images\n`
+    output += `- All image assets with download URLs are listed in the Image Assets section\n`
+    output += `- Use \`<img :src="url" />\` or the \`<Image>\` component with the provided URL\n`
+    output += `- Match exact width/height from the tree\n`
+    output += `- For decorative/background images: use as CSS background or absolute-positioned img\n`
+    output += `- Elements marked [decorative] (skip) are background effects — recreate with CSS gradients/blur or skip\n\n`
+
+    output += `### Step 7: Final check\n`
+    output += `- Compare your output against the screenshot URL for visual parity\n`
+    output += `- Verify: correct colors, correct spacing, correct text content, correct image sizes\n`
+    output += `- Verify: all design system components used where applicable\n`
+    output += `- Verify: no placeholder text, no dummy images, no missing elements\n\n`
+
+    output += `### Tech Stack\n`
+    output += `- Vue 3 + Composition API (\`<script setup>\`)\n`
+    output += `- Tailwind CSS (utility-first, arbitrary values with \`[]\`)\n`
+    output += `- Components: \`@/components/design/\` (see mapping above)\n`
+    output += `- Icons: \`@phosphor-icons/vue\` (e.g. \`<PhPencil />\`)\n`
+    output += `- NO \`<style>\` block — use Tailwind only\n`
+    output += `- Single quotes, no semicolons, 2-space indent\n`
+
+    return txt(output)
+  },
+)
+
+// ---------- get_figma_node ----------
 server.tool('get_figma_node', 'Fetch Figma node tree with layout, styles, text.', {
   figma_url: urlParam, node_id: nodeParam,
   depth: z.number().optional().default(10).describe('Max depth'),
@@ -464,6 +484,7 @@ server.tool('get_figma_node', 'Fetch Figma node tree with layout, styles, text.'
   return doc ? json(simplify(doc)) : txt(`Node not found in ${fileKey}`)
 })
 
+// ---------- get_figma_screenshot ----------
 server.tool('get_figma_screenshot', 'Get rendered image URL of a Figma node. Auto-retries at lower scale on timeout.', {
   figma_url: urlParam, node_id: nodeParam,
   scale: z.number().optional().default(2).describe('Image scale 1-4, auto-reduces on timeout'),
@@ -491,6 +512,7 @@ server.tool('get_figma_screenshot', 'Get rendered image URL of a Figma node. Aut
   return txt(`No image for node ${nodeId}`)
 })
 
+// ---------- get_figma_styles ----------
 server.tool('get_figma_styles', 'Get design tokens (colors, text, effects) from Figma file.', {
   figma_url: urlParam,
 }, async ({ figma_url }) => {
@@ -499,6 +521,7 @@ server.tool('get_figma_styles', 'Get design tokens (colors, text, effects) from 
   return json((data.meta?.styles || []).map((s) => ({ key: s.key, name: s.name, type: s.style_type, desc: s.description })))
 })
 
+// ---------- get_figma_components ----------
 server.tool('get_figma_components', 'List Figma file components with IDs and names.', {
   figma_url: urlParam,
 }, async ({ figma_url }) => {
@@ -507,6 +530,7 @@ server.tool('get_figma_components', 'List Figma file components with IDs and nam
   return json((data.meta?.components || []).map((c) => ({ key: c.key, name: c.name, desc: c.description, frame: c.containing_frame?.name, nodeId: c.node_id })))
 })
 
+// ---------- map_figma_to_vue ----------
 server.tool('map_figma_to_vue', 'Map Figma elements → Vue design system components with imports and props.', {
   figma_url: urlParam, node_id: nodeParam,
 }, async ({ figma_url, node_id }) => {
@@ -526,19 +550,7 @@ server.tool('map_figma_to_vue', 'Map Figma elements → Vue design system compon
   })
 })
 
-server.tool('generate_vue_code', 'Generate pixel-faithful Vue 3 SFC from Figma node. Uses actual text, colors, spacing, dimensions from design.', {
-  figma_url: urlParam, node_id: nodeParam,
-  component_name: z.string().optional().default('FigmaComponent'),
-}, async ({ figma_url, node_id, component_name }) => {
-  const { fileKey, nodeId } = resolveId(figma_url, node_id)
-  const doc = await fetchNode(fileKey, nodeId)
-  if (!doc) return txt('Node not found')
-  const matches = mapFigmaToComponents(doc)
-  const simplified = simplify(doc)
-  const vue = generateVue(matches, simplified, doc, fileKey)
-  return txt(`<!-- ${component_name}.vue -->\n<!-- Figma: ${figma_url} | Node: ${nodeId || 'root'} -->\n\n${vue}`)
-})
-
+// ---------- list_design_components ----------
 server.tool('list_design_components', 'List Vue design system components with props/slots/examples.', {
   filter: z.string().optional().describe('Regex filter by name'),
   category: z.enum(['all', ...Object.keys(CATEGORIES)]).optional().default('all'),
@@ -553,6 +565,7 @@ server.tool('list_design_components', 'List Vue design system components with pr
   })))
 })
 
+// ---------- get_figma_images ----------
 server.tool('get_figma_images', 'Get download URLs for images/assets in a Figma file.', {
   figma_url: urlParam,
 }, async ({ figma_url }) => {
@@ -561,5 +574,42 @@ server.tool('get_figma_images', 'Get download URLs for images/assets in a Figma 
   return json(data.meta?.images || {})
 })
 
+// ---------- export_nodes ----------
+server.tool('export_nodes',
+  'Export specific Figma nodes as downloadable PNG/SVG/PDF images. Useful for icons, illustrations, logos. Batch export multiple nodes at once.',
+  {
+    figma_url: urlParam,
+    node_ids: z.string().describe('Comma-separated node IDs to export (e.g. "1:2,3:4,5:6")'),
+    format: z.enum(['png', 'svg', 'jpg', 'pdf']).optional().default('png'),
+    scale: z.number().optional().default(2).describe('Scale for raster formats (1-4)'),
+  },
+  async ({ figma_url, node_ids, format, scale }) => {
+    const { fileKey } = parseUrl(figma_url)
+    const ids = node_ids.split(',').map((id) => id.trim().replaceAll('-', ':')).join(',')
+
+    for (let s = scale; s >= 1; s--) {
+      try {
+        const data = await figmaFetch(`/images/${fileKey}?ids=${encodeURIComponent(ids)}&format=${format}&scale=${s}`)
+        const results = []
+        for (const [nodeId, url] of Object.entries(data.images || {})) {
+          if (url) results.push({ nodeId, url, format, scale: s })
+          else results.push({ nodeId, error: 'render failed' })
+        }
+        if (results.some((r) => r.url)) {
+          const note = s < scale ? `\n(scale reduced from ${scale}x to ${s}x due to timeout)` : ''
+          return json({ exports: results, note: note || undefined })
+        }
+      } catch (e) {
+        if (e.message.includes('timeout') || e.message.includes('Render timeout')) {
+          if (s <= 1) return txt(`Render timeout for all scales. Try fewer/smaller nodes.`)
+          continue
+        }
+        throw e
+      }
+    }
+    return txt('No images exported')
+  },
+)
+
 const transport = new StdioServerTransport()
-server.connect(transport).then(() => console.error('figma-vue MCP ready'))
+server.connect(transport).then(() => console.error('figma-vue MCP v2 ready'))
