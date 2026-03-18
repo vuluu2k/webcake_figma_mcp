@@ -94,7 +94,7 @@ export function describeNode(node, parentBounds, depth = 0) {
   if (node.cornerRadius) desc += ` rounded:${node.cornerRadius}px`
   if (node.effects?.some((e) => e.visible !== false && e.type === 'DROP_SHADOW')) desc += ` shadow`
   if (node.opacity != null && node.opacity < 1) desc += ` opacity:${node.opacity}`
-  if (node.clipsContent) desc += ` clip`
+  // skip clipsContent — causes unwanted overflow-hidden on images
 
   // Text
   if (node.type === 'TEXT' && node.characters) {

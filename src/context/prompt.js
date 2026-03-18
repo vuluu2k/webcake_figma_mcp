@@ -24,7 +24,7 @@ You MUST implement this Figma design as a Vue 3 SFC that is **visually identical
 - Shadows: \`shadow-sm\` / \`shadow\` / \`shadow-md\` / \`shadow-lg\`
 - Borders: \`border border-[#hex]\`
 - Opacity: \`opacity-N\`
-- Overflow: \`overflow-hidden\` when "clip"
+- Do NOT add \`overflow-hidden\` unless explicitly needed — it causes images to be cropped
 
 ### Step 4: Background effects (decorative elements)
 Elements marked \`[bg-effect]\` are decorative backgrounds. Recreate them with CSS:
