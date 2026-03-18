@@ -1,5 +1,5 @@
 {
-  "name": "figma-vue-mcp",
+  "name": "webcake_figma_mcp",
   "version": "1.0.0",
   "description": "Custom Figma MCP server for Vue 3 + BuilderX design system",
   "type": "module",

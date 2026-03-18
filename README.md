@@ -5,13 +5,13 @@ Custom MCP server cho BuilderX — fetch Figma design → output Vue 3 code vớ
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pancake-vn/builderx_spa/master/mcp/figma-vue/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/pancake-vn/webcake_figma_mcp/main/install.sh -o install.sh && bash install.sh
 ```
 
 Hoặc nếu đã clone repo:
 
 ```bash
-bash mcp/figma-vue/install.sh
+bash mcp/webcake_figma_mcp/install.sh
 ```
 
 Script tự động:
@@ -24,7 +24,7 @@ Script tự động:
 ## Manual Install
 
 ```bash
-cd mcp/figma-vue && npm install
+cd mcp/webcake_figma_mcp && npm install
 ```
 
 Tạo config cho editor (chọn 1):
@@ -33,10 +33,10 @@ Tạo config cho editor (chọn 1):
 ```json
 {
   "mcpServers": {
-    "figma-vue": {
+    "webcake_figma_mcp": {
       "type": "stdio",
       "command": "node",
-      "args": ["mcp/figma-vue/server.js"],
+      "args": ["mcp/webcake_figma_mcp/server.js"],
       "env": {
         "FIGMA_ACCESS_TOKEN": "",
         "WEBCAKE_JWT": "",
@@ -150,7 +150,7 @@ FRAME "name" WxH @x,y [row gap:16 pad:12,16,12,16 align:CENTER] bg:#fff rounded:
 ## Cấu trúc
 
 ```
-mcp/figma-vue/
+mcp/webcake_figma_mcp/
 ├── server.js              # Entry point, tool definitions
 ├── install.sh             # Auto-setup cho mọi editor
 ├── package.json

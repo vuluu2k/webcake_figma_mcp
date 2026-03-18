@@ -1,29 +1,26 @@
 #!/bin/bash
 set -e
 
-REPO_URL="https://github.com/pancake-vn/builderx_spa.git"
-MCP_SUBDIR="mcp/figma-vue"
+REPO_URL="https://github.com/pancake-vn/webcake_figma_mcp.git"
 
 # Detect if running from repo or via curl | bash
 if [ -f "$(dirname "$0")/server.js" ] 2>/dev/null; then
   DIR="$(cd "$(dirname "$0")" && pwd)"
   ROOT="$(cd "$DIR/../.." && pwd)"
 else
-  # Running via curl | bash — clone MCP into current project
+  # Running via curl | bash — clone into mcp/webcake_figma_mcp
   echo "=== Downloading Figma-Vue MCP ==="
   ROOT="$(pwd)"
-  DIR="$ROOT/$MCP_SUBDIR"
+  DIR="$ROOT/mcp/webcake_figma_mcp"
 
-  if [ -d "$DIR" ]; then
-    echo "  → $MCP_SUBDIR already exists, updating..."
+  if [ -d "$DIR/.git" ]; then
+    echo "  → Updating..."
     cd "$DIR" && git pull --quiet 2>/dev/null || true
   else
-    echo "  → Cloning $MCP_SUBDIR..."
+    echo "  → Cloning..."
     mkdir -p "$ROOT/mcp"
-    git clone --depth 1 --filter=blob:none --sparse "$REPO_URL" /tmp/figma-vue-clone 2>/dev/null
-    cd /tmp/figma-vue-clone && git sparse-checkout set "$MCP_SUBDIR" 2>/dev/null
-    cp -r "/tmp/figma-vue-clone/$MCP_SUBDIR" "$DIR"
-    rm -rf /tmp/figma-vue-clone
+    rm -rf "$DIR"
+    git clone --depth 1 "$REPO_URL" "$DIR" 2>/dev/null
   fi
   echo "  ✓ Downloaded to $DIR"
 fi
@@ -81,7 +78,7 @@ mcp_json_full() {
   cat << EOF
 {
   "mcpServers": {
-    "figma-vue": $(mcp_json_stdio)
+    "webcake_figma_mcp": $(mcp_json_stdio)
   }
 }
 EOF
@@ -94,8 +91,8 @@ upsert_mcp_config() {
   mkdir -p "$dir"
 
   if [ -f "$file" ]; then
-    # Check if figma-vue already configured
-    if grep -q "figma-vue" "$file" 2>/dev/null; then
+    # Check if webcake_figma_mcp already configured
+    if grep -q "webcake_figma_mcp" "$file" 2>/dev/null; then
       echo "  ✓ $file (already configured)"
       return
     fi
@@ -104,7 +101,7 @@ upsert_mcp_config() {
 import json, sys
 with open('$file', 'r') as f: cfg = json.load(f)
 cfg.setdefault('mcpServers', {})
-cfg['mcpServers']['figma-vue'] = $(mcp_json_stdio | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
+cfg['mcpServers']['webcake_figma_mcp'] = $(mcp_json_stdio | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
 with open('$file', 'w') as f: json.dump(cfg, f, indent=2)
 " 2>/dev/null && echo "  ✓ $file (updated)" && return
   fi
@@ -134,7 +131,7 @@ for editor in "${EDITORS[@]}"; do
       # Project: .vscode/mcp.json (VS Code format uses "servers" key)
       VSCODE_FILE="$ROOT/.vscode/mcp.json"
       mkdir -p "$ROOT/.vscode"
-      if [ -f "$VSCODE_FILE" ] && grep -q "figma-vue" "$VSCODE_FILE" 2>/dev/null; then
+      if [ -f "$VSCODE_FILE" ] && grep -q "webcake_figma_mcp" "$VSCODE_FILE" 2>/dev/null; then
         echo "  ✓ $VSCODE_FILE (already configured)"
       else
         python3 -c "
@@ -144,7 +141,7 @@ try:
   with open('$VSCODE_FILE', 'r') as f: cfg = json.load(f)
 except: pass
 cfg.setdefault('servers', {})
-cfg['servers']['figma-vue'] = {
+cfg['servers']['webcake_figma_mcp'] = {
   'type': 'stdio',
   'command': 'node',
   'args': ['$SERVER_PATH'],

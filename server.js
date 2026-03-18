@@ -14,7 +14,7 @@ import { uploadUrls } from './src/figma/upload.js'
 import { downloadToFile } from './src/figma/download.js'
 import { txt, json } from './src/utils.js'
 
-const server = new McpServer({ name: 'figma-vue', version: '2.0.0', description: 'Figma → Vue 3 MCP' })
+const server = new McpServer({ name: 'webcake_figma_mcp', version: '2.0.0', description: 'Figma → Vue 3 MCP' })
 const U = z.string().describe('Figma URL or file key')
 const N = z.string().optional().describe('Node ID, optional if in URL')
 
@@ -192,4 +192,4 @@ server.tool('upload_images', 'Upload image URLs to Webcake CDN. Converts externa
 // ===== Start =====
 
 const transport = new StdioServerTransport()
-server.connect(transport).then(() => console.error('figma-vue MCP v2 ready'))
+server.connect(transport).then(() => console.error('webcake_figma_mcp MCP v2 ready'))
