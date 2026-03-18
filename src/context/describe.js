@@ -7,14 +7,41 @@ function isVectorGroup(node) {
   return kids.length > 0 && kids.every((c) => c.type === 'VECTOR' || (c.type === 'GROUP' && isVectorGroup(c)))
 }
 
-function isDecorative(node) {
-  if (node.type === 'ELLIPSE' && node.effects?.some((e) => e.visible !== false && /BLUR/.test(e.type))) return true
+function isIllustration(node) {
   if (node.type === 'GROUP' && node.children) {
     const kids = visible(node.children)
-    if (kids.length > 5 && kids.filter((c) => c.type === 'VECTOR' || (c.type === 'GROUP' && isVectorGroup(c))).length > kids.length * 0.7) return true
-    if (kids.every((c) => isDecorative(c))) return true
+    return kids.length > 5 && kids.filter((c) => c.type === 'VECTOR' || (c.type === 'GROUP' && isVectorGroup(c))).length > kids.length * 0.7
   }
   return false
+}
+
+function describeDecorative(node, parentBounds, sp) {
+  const b = node.absoluteBoundingBox
+  const w = b ? Math.round(b.width) : 0
+  const h = b ? Math.round(b.height) : 0
+  const relX = b && parentBounds ? Math.round(b.x - parentBounds.x) : 0
+  const relY = b && parentBounds ? Math.round(b.y - parentBounds.y) : 0
+
+  // Blurred ellipse → CSS: absolute positioned div with gradient + blur
+  if (node.type === 'ELLIPSE') {
+    const fills = visible(node.fills)
+    const blur = node.effects?.find((e) => e.visible !== false && /BLUR/.test(e.type))
+    const blurR = blur?.radius || 0
+    let fillDesc = ''
+    for (const f of fills) {
+      if (f.type === 'SOLID') fillDesc += ` bg:${hex(f.color, f.opacity)}`
+      else if (f.type?.includes('GRADIENT')) {
+        fillDesc += ' gradient'
+        if (f.gradientStops?.length) {
+          const colors = f.gradientStops.map((s) => hex(s.color)).filter(Boolean)
+          if (colors.length) fillDesc += `(${colors.join(' → ')})`
+        }
+      }
+    }
+    return `${sp}[bg-effect] ELLIPSE "${node.name}" ${w}x${h} at(${relX},${relY})${fillDesc} blur:${blurR}px → CSS: absolute rounded-full${fillDesc} blur-[${blurR}px]`
+  }
+
+  return `${sp}[illustration] ${node.type} "${node.name}" ${w}x${h} at(${relX},${relY}) → use export_nodes to render as SVG/PNG`
 }
 
 export function describeNode(node, parentBounds, depth = 0) {
@@ -24,7 +51,17 @@ export function describeNode(node, parentBounds, depth = 0) {
   const w = b ? Math.round(b.width) : 0
   const h = b ? Math.round(b.height) : 0
 
-  if (isDecorative(node)) return [`${sp}[decorative] ${node.type} "${node.name}" ${w}x${h} (skip)`]
+  // Blurred ellipses → describe how to recreate with CSS
+  if (node.type === 'ELLIPSE' && node.effects?.some((e) => e.visible !== false && /BLUR/.test(e.type))) {
+    return [describeDecorative(node, parentBounds, sp)]
+  }
+
+  // Vector illustrations → suggest export
+  if (isIllustration(node)) {
+    return [describeDecorative(node, parentBounds, sp)]
+  }
+
+  // Skip individual vectors without image fills
   if (node.type === 'VECTOR' && !node.fills?.some((f) => f.visible !== false && f.type === 'IMAGE')) return lines
 
   const relX = b && parentBounds ? Math.round(b.x - parentBounds.x) : 0
