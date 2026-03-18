@@ -2,9 +2,10 @@ export const IMPLEMENTATION_PROMPT = (layoutType) => `## Implementation Prompt
 
 You MUST implement this Figma design as a Vue 3 SFC that is **visually identical** to the screenshot above.
 
-### Step 1: Analyze the screenshot
-- Open/view the screenshot URL to understand the full visual layout
-- Identify the visual hierarchy: background layers, foreground content, overlapping elements
+### Step 1: VIEW the screenshot (CRITICAL)
+- Use the Read tool to open the local screenshot file path shown above — you MUST see the design before writing ANY code
+- Study the visual layout: what is background, what overlaps, spacing, colors, typography
+- This is the source of truth — your code must match this image exactly
 - Layout type detected: **${layoutType}**
 
 ### Step 2: Build the layout

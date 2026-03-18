@@ -11,6 +11,7 @@ import { collectText, collectImages } from './src/context/collectors.js'
 import { buildComponentSection, buildTextSection, buildImageSection } from './src/context/output.js'
 import { IMPLEMENTATION_PROMPT } from './src/context/prompt.js'
 import { uploadUrls } from './src/figma/upload.js'
+import { downloadToFile } from './src/figma/download.js'
 import { txt, json } from './src/utils.js'
 
 const server = new McpServer({ name: 'figma-vue', version: '2.0.0', description: 'Figma → Vue 3 MCP' })
@@ -53,9 +54,18 @@ server.tool('get_design_context',
       }
     }
 
+    // Download screenshot to local file so Claude can VIEW it
+    let screenshotPath = null
+    const screenshotUrl = screenshot?.images?.[nodeId]
+    if (screenshotUrl) {
+      const fname = `${fileKey}_${nodeId?.replace(/:/g, '-') || 'root'}.png`
+      screenshotPath = await downloadToFile(screenshotUrl, fname).catch(() => null)
+    }
+
     const b = doc.absoluteBoundingBox
     let out = `# Design Context: ${doc.name}\nSize: ${b ? `${Math.round(b.width)}x${Math.round(b.height)}px` : 'unknown'}\n`
-    if (screenshot?.images?.[nodeId]) out += `Screenshot: ${screenshot.images[nodeId]}\n`
+    if (screenshotPath) out += `Screenshot (local): ${screenshotPath}\n`
+    if (screenshotUrl) out += `Screenshot (url): ${screenshotUrl}\n`
     out += `\n## Element Tree\n(TYPE "name" WxH at(x,y) [layout] styles → <Component>)\n\n`
     out += describeNode(doc, null).join('\n') + '\n\n'
     if (matches.length) out += buildComponentSection(matches)
