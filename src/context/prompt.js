@@ -52,7 +52,7 @@ Elements marked \`[illustration]\` are complex vector art. Use \`export_nodes\` 
 ### Step 7: Images
 - Image assets with \`src:\` URLs (Webcake CDN) are permanent — use them directly in code
 - Images with \`url:\` (Figma S3) are temporary — call \`upload_images\` tool to convert first
-- Use \`<img :src="url" class="w-[Wpx] h-[Hpx] object-cover" />\` with exact dimensions
+- Use \`<img :src="url" class="w-[Wpx] h-[Hpx]" />\` with exact dimensions — do NOT use object-cover (crops images)
 - Position images using \`absolute left-[Xpx] top-[Ypx]\` from the \`at(x,y)\` coordinates
 
 ### Step 8: Final check
