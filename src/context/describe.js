@@ -1,6 +1,5 @@
 import { hex, visible } from '../utils.js'
 import { textDesignClass } from '../design/text.js'
-import { mapFigmaToComponents } from '../design/matcher.js'
 
 function hasContent(node) {
   if (node.type === 'TEXT' && node.characters) return true
@@ -25,7 +24,6 @@ function cssGradient(fill) {
     const pct = Math.round(s.position * 100)
     return `${color} ${pct}%`
   })
-  // Compute angle from gradientHandlePositions
   let angle = 180
   if (fill.gradientHandlePositions?.length >= 2) {
     const [p0, p1] = fill.gradientHandlePositions
@@ -46,13 +44,9 @@ function cssShadow(effect) {
 
 function sizingMode(node) {
   const parts = []
-  // primaryAxisSizingMode: FIXED or AUTO (hug)
-  // counterAxisSizingMode: FIXED or AUTO (hug)
   if (node.primaryAxisSizingMode === 'AUTO') parts.push('h:hug')
   if (node.counterAxisSizingMode === 'AUTO') parts.push('w:hug')
-  // layoutAlign on child: STRETCH = fill parent
   if (node.layoutAlign === 'STRETCH') parts.push('fill')
-  // layoutGrow: 1 = flex-grow
   if (node.layoutGrow === 1) parts.push('grow')
   return parts.length ? parts.join(' ') : null
 }
@@ -104,8 +98,9 @@ function commonStyles(node) {
 }
 
 // ===== Main describe =====
+// matchMap: Map<nodeId, { comp }> — pre-computed by buildMatchMap() for O(1) lookup
 
-export function describeNode(node, parentBounds, depth = 0) {
+export function describeNode(node, parentBounds, depth = 0, matchMap) {
   const sp = '  '.repeat(depth)
   const lines = []
   const b = node.absoluteBoundingBox
@@ -190,10 +185,10 @@ export function describeNode(node, parentBounds, depth = 0) {
     }
     const styles = commonStyles(node)
     if (styles) desc += ` ${styles}`
-    const match = mapFigmaToComponents(node, 0, [])[0]
+    const match = matchMap?.get(node.id)
     if (match) desc += ` → <${match.comp}>`
     lines.push(desc)
-    for (const child of visible(node.children)) lines.push(...describeNode(child, b, depth + 1))
+    for (const child of visible(node.children)) lines.push(...describeNode(child, b, depth + 1, matchMap))
     return lines
   }
 
@@ -217,11 +212,11 @@ export function describeNode(node, parentBounds, depth = 0) {
   const styles = commonStyles(node)
   if (styles) desc += ` ${styles}`
 
-  // Component match
-  const match = mapFigmaToComponents(node, 0, [])[0]
+  // Component match — O(1) lookup from pre-computed map
+  const match = matchMap?.get(node.id)
   if (match) desc += ` → <${match.comp}>`
 
   lines.push(desc)
-  for (const child of visible(node.children)) lines.push(...describeNode(child, b, depth + 1))
+  for (const child of visible(node.children)) lines.push(...describeNode(child, b, depth + 1, matchMap))
   return lines
 }

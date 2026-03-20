@@ -66,12 +66,34 @@ const RULES = [
 
 function matchNode(node) {
   const name = node.name || ''
+  // 1. Name-based matching (existing rules)
   for (const rule of RULES) {
     if (rule.test(name, node.type)) return rule.comp
+  }
+  // 2. Property-based matching for INSTANCE nodes (smarter: checks variant values)
+  if (node.type === 'INSTANCE' && node.componentProperties) {
+    for (const val of Object.values(node.componentProperties)) {
+      const v = String(val.value || '')
+      if (!v) continue
+      for (const rule of RULES) {
+        if (rule.test(v, node.type)) return rule.comp
+      }
+    }
   }
   return null
 }
 
+// O(N) single-pass: pre-compute all matches into a Map<nodeId, match>
+export function buildMatchMap(node, depth = 0, map = new Map()) {
+  const comp = matchNode(node)
+  if (comp) map.set(node.id, { id: node.id, name: node.name, type: node.type, comp, depth })
+  if (node.children) {
+    for (const child of node.children) buildMatchMap(child, depth + 1, map)
+  }
+  return map
+}
+
+// Legacy: returns flat array (for tools that need array output)
 export function mapFigmaToComponents(node, depth = 0, results = []) {
   const comp = matchNode(node)
   if (comp) results.push({ id: node.id, name: node.name, type: node.type, comp, depth })
